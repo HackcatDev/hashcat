@@ -27,6 +27,241 @@
 #include "brain.h"
 #endif
 
+#if defined (_WIN)
+#include <windows.h>
+#include <process.h>
+#else
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
+
+static char *hook_strndup (const char *src, const int len)
+{
+  const int safe_len = MAX (len, 0);
+
+  char *dst = (char *) hcmalloc ((size_t) safe_len + 1);
+
+  if ((src != NULL) && (safe_len > 0))
+  {
+    memcpy (dst, src, (size_t) safe_len);
+  }
+
+  dst[safe_len] = 0;
+
+  return dst;
+}
+
+static int hook_setenv (const char *name, const char *value)
+{
+  #if defined (_WIN)
+  return _putenv_s (name, value);
+  #else
+  return setenv (name, value, 1);
+  #endif
+}
+
+#if defined (_WIN)
+static int hook_unsetenv (const char *name)
+{
+  return _putenv_s (name, "");
+}
+#endif
+
+#if defined (_WIN)
+typedef struct hook_env_backup
+{
+  const char *name;
+  char       *value;
+  bool        exists;
+
+} hook_env_backup_t;
+
+static void hook_env_backup_init (hook_env_backup_t *backup, const char *name)
+{
+  backup->name   = name;
+  backup->value  = NULL;
+  backup->exists = false;
+
+  const char *old_value = getenv (name);
+
+  if (old_value == NULL) return;
+
+  backup->exists = true;
+  backup->value  = hook_strndup (old_value, (int) strlen (old_value));
+}
+
+static void hook_env_backup_restore (hook_env_backup_t *backup)
+{
+  if (backup->exists == true)
+  {
+    hook_setenv (backup->name, backup->value);
+  }
+  else
+  {
+    hook_unsetenv (backup->name);
+  }
+
+  hcfree (backup->value);
+
+  backup->value = NULL;
+}
+
+static void run_on_success_hook_windows (hashcat_ctx_t *hashcat_ctx, const char *hook_cmd, const char *session, const char *hash_str, const char *plain_str, const char *plain_hex, const char *crackpos_str, const char *output_str)
+{
+  hook_env_backup_t backups[] =
+  {
+    { "HASHCAT_HOOK_SESSION",       NULL, false },
+    { "HASHCAT_HOOK_HASH",          NULL, false },
+    { "HASHCAT_HOOK_PLAIN",         NULL, false },
+    { "HASHCAT_HOOK_PLAIN_HEX",     NULL, false },
+    { "HASHCAT_HOOK_CRACKPOS",      NULL, false },
+    { "HASHCAT_HOOK_OUTPUT",        NULL, false },
+    { "HASHCAT_HOOK_COMMAND",       NULL, false }
+  };
+
+  const int backups_cnt = (int) (sizeof (backups) / sizeof (backups[0]));
+
+  for (int i = 0; i < backups_cnt; i++)
+  {
+    hook_env_backup_init (&backups[i], backups[i].name);
+  }
+
+  bool env_ok = true;
+
+  if (hook_setenv ("HASHCAT_HOOK_SESSION", session) != 0) env_ok = false;
+  if (hook_setenv ("HASHCAT_HOOK_HASH", hash_str) != 0) env_ok = false;
+  if (hook_setenv ("HASHCAT_HOOK_PLAIN", plain_str) != 0) env_ok = false;
+  if (hook_setenv ("HASHCAT_HOOK_PLAIN_HEX", plain_hex) != 0) env_ok = false;
+  if (hook_setenv ("HASHCAT_HOOK_CRACKPOS", crackpos_str) != 0) env_ok = false;
+  if (hook_setenv ("HASHCAT_HOOK_OUTPUT", output_str) != 0) env_ok = false;
+  if (hook_setenv ("HASHCAT_HOOK_COMMAND", hook_cmd) != 0) env_ok = false;
+
+  if (env_ok == true)
+  {
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+
+    memset (&si, 0, sizeof (si));
+    memset (&pi, 0, sizeof (pi));
+
+    si.cb = sizeof (si);
+
+    char *cmdline = NULL;
+
+    if (hc_asprintf (&cmdline, "cmd.exe /C %s", hook_cmd) != -1)
+    {
+      if (CreateProcessA (NULL, cmdline, NULL, NULL, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, NULL, NULL, &si, &pi) == FALSE)
+      {
+        event_log_warning (hashcat_ctx, "--on-success-hook launch failed.");
+      }
+      else
+      {
+        CloseHandle (pi.hThread);
+        CloseHandle (pi.hProcess);
+      }
+
+      hcfree (cmdline);
+    }
+  }
+  else
+  {
+    event_log_warning (hashcat_ctx, "--on-success-hook environment setup failed.");
+  }
+
+  for (int i = backups_cnt - 1; i >= 0; i--)
+  {
+    hook_env_backup_restore (&backups[i]);
+  }
+}
+#else
+static void run_on_success_hook_posix (hashcat_ctx_t *hashcat_ctx, const char *hook_cmd, const char *session, const char *hash_str, const char *plain_str, const char *plain_hex, const char *crackpos_str, const char *output_str)
+{
+  const pid_t child_pid = fork ();
+
+  if (child_pid == -1)
+  {
+    event_log_warning (hashcat_ctx, "--on-success-hook fork failed.");
+
+    return;
+  }
+
+  if (child_pid == 0)
+  {
+    const pid_t grandchild_pid = fork ();
+
+    if (grandchild_pid == -1)
+    {
+      _exit (127);
+    }
+
+    if (grandchild_pid > 0)
+    {
+      _exit (0);
+    }
+
+    setsid ();
+
+    if (hook_setenv ("HASHCAT_HOOK_SESSION", session) != 0) _exit (127);
+    if (hook_setenv ("HASHCAT_HOOK_HASH", hash_str) != 0) _exit (127);
+    if (hook_setenv ("HASHCAT_HOOK_PLAIN", plain_str) != 0) _exit (127);
+    if (hook_setenv ("HASHCAT_HOOK_PLAIN_HEX", plain_hex) != 0) _exit (127);
+    if (hook_setenv ("HASHCAT_HOOK_CRACKPOS", crackpos_str) != 0) _exit (127);
+    if (hook_setenv ("HASHCAT_HOOK_OUTPUT", output_str) != 0) _exit (127);
+    if (hook_setenv ("HASHCAT_HOOK_COMMAND", hook_cmd) != 0) _exit (127);
+
+    execl ("/bin/sh", "sh", "-c", hook_cmd, (char *) NULL);
+
+    _exit (127);
+  }
+
+  int child_status = 0;
+
+  if (waitpid (child_pid, &child_status, 0) == -1)
+  {
+    event_log_warning (hashcat_ctx, "--on-success-hook waitpid failed.");
+  }
+}
+#endif
+
+static void run_on_success_hook (hashcat_ctx_t *hashcat_ctx, const char *hash_buf, const int hash_len, const u8 *plain_ptr, const int plain_len, const u64 crackpos, const char *output_buf, const int output_len)
+{
+  user_options_t *user_options = hashcat_ctx->user_options;
+
+  if (user_options->on_success_hook == NULL) return;
+
+  char *hash_str = hook_strndup (hash_buf, hash_len);
+  char *plain_str = hook_strndup ((const char *) plain_ptr, plain_len);
+  char *plain_hex = (char *) hcmalloc (((size_t) plain_len * 2) + 1);
+  char *output_str = NULL;
+  char crackpos_str[32] = { 0 };
+
+  int output_len_clean = output_len;
+
+  while ((output_len_clean > 0) && ((output_buf[output_len_clean - 1] == '\n') || (output_buf[output_len_clean - 1] == '\r')))
+  {
+    output_len_clean--;
+  }
+
+  output_str = hook_strndup (output_buf, output_len_clean);
+
+  exec_hexify (plain_ptr, (size_t) plain_len, (u8 *) plain_hex);
+
+  plain_hex[plain_len * 2] = 0;
+
+  snprintf (crackpos_str, sizeof (crackpos_str), "%" PRIu64, crackpos);
+
+  #if defined (_WIN)
+  run_on_success_hook_windows (hashcat_ctx, user_options->on_success_hook, user_options->session, hash_str, plain_str, plain_hex, crackpos_str, output_str);
+  #else
+  run_on_success_hook_posix (hashcat_ctx, user_options->on_success_hook, user_options->session, hash_str, plain_str, plain_hex, crackpos_str, output_str);
+  #endif
+
+  hcfree (output_str);
+  hcfree (plain_hex);
+  hcfree (plain_str);
+  hcfree (hash_str);
+}
+
 int sort_by_digest_p0p1 (const void *v1, const void *v2, void *v3)
 {
   const u32 *d1 = (const u32 *) v1;
@@ -480,6 +715,8 @@ int check_hash (hashcat_ctx_t *hashcat_ctx, hc_device_param_t *device_param, pla
   const int tmp_len = outfile_write (hashcat_ctx, (char *) out_buf, out_len, plain_ptr, plain_len, crackpos, NULL, 0, true, (char *) tmp_buf);
 
   EVENT_DATA (EVENT_CRACKER_HASH_CRACKED, tmp_buf, tmp_len);
+
+  run_on_success_hook (hashcat_ctx, (const char *) out_buf, out_len, plain_ptr, plain_len, crackpos, (const char *) tmp_buf, tmp_len);
 
   outfile_write_close (hashcat_ctx);
 

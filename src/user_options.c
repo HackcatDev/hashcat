@@ -116,6 +116,7 @@ static const struct option long_options[] =
   {"markov-threshold",          required_argument, NULL, IDX_MARKOV_THRESHOLD},
   {"metal-compiler-runtime",    required_argument, NULL, IDX_METAL_COMPILER_RUNTIME},
   {"nonce-error-corrections",   required_argument, NULL, IDX_NONCE_ERROR_CORRECTIONS},
+  {"on-success-hook",           required_argument, NULL, IDX_ON_SUCCESS_HOOK},
   {"opencl-device-types",       required_argument, NULL, IDX_OPENCL_DEVICE_TYPES},
   {"optimized-kernel-enable",   no_argument,       NULL, IDX_OPTIMIZED_KERNEL_ENABLE},
   {"multiply-accel-disable",    no_argument,       NULL, IDX_MULTIPLY_ACCEL_DISABLE},
@@ -277,6 +278,7 @@ int user_options_init (hashcat_ctx_t *hashcat_ctx)
   user_options->markov_threshold          = MARKOV_THRESHOLD;
   user_options->metal_compiler_runtime    = METAL_COMPILER_RUNTIME;
   user_options->nonce_error_corrections   = NONCE_ERROR_CORRECTIONS;
+  user_options->on_success_hook           = NULL;
   user_options->opencl_device_types       = NULL;
   user_options->optimized_kernel          = OPTIMIZED_KERNEL;
   user_options->multiply_accel            = MULTIPLY_ACCEL;
@@ -567,6 +569,8 @@ int user_options_getopt (hashcat_ctx_t *hashcat_ctx, int argc, char **argv)
                                           user_options->hccapx_message_pair_chgd  = true;                            break;
       case IDX_NONCE_ERROR_CORRECTIONS:   user_options->nonce_error_corrections   = hc_strtoul (optarg, NULL, 10);
                                           user_options->nonce_error_corrections_chgd = true;                         break;
+      case IDX_ON_SUCCESS_HOOK:           user_options->on_success_hook           = optarg;
+                  user_options->on_success_hook_chgd      = true;                            break;
       case IDX_KEYBOARD_LAYOUT_MAPPING:   user_options->keyboard_layout_mapping   = optarg;                          break;
       case IDX_TRUECRYPT_KEYFILES:        user_options->truecrypt_keyfiles        = optarg;                          break;
       case IDX_VERACRYPT_KEYFILES:        user_options->veracrypt_keyfiles        = optarg;                          break;
@@ -735,6 +739,16 @@ int user_options_sanity (hashcat_ctx_t *hashcat_ctx)
     if (error)
     {
       event_log_error (hashcat_ctx, "Separator length has to be exactly 1 byte (single char or hex format e.g. 0x09 for TAB)");
+
+      return -1;
+    }
+  }
+
+  if (user_options->on_success_hook_chgd == true)
+  {
+    if ((user_options->on_success_hook == NULL) || (user_options->on_success_hook[0] == 0))
+    {
+      event_log_error (hashcat_ctx, "Invalid --on-success-hook value specified.");
 
       return -1;
     }

@@ -847,6 +847,7 @@ typedef enum user_options_map
   #endif
   IDX_BYPASS_THRESHOLD          = 0xff84,
   IDX_BYPASS_DELAY              = 0xff85,
+  IDX_ON_SUCCESS_HOOK           = 0xff86,
   IDX_COLOR_CRACKED             = 0xff59,
   IDX_BRIDGE_PARAMETER1         = 0xff80,
   IDX_BRIDGE_PARAMETER2         = 0xff81,
@@ -2466,6 +2467,7 @@ typedef struct user_options
   bool         metal_compiler_runtime_chgd;
   bool         segment_size_chgd;
   bool         workload_profile_chgd;
+  bool         on_success_hook_chgd;
   bool         skip_chgd;
   bool         limit_chgd;
   bool         scrypt_tmto_chgd;
@@ -2541,6 +2543,7 @@ typedef struct user_options
   char        *induction_dir;
   char        *keyboard_layout_mapping;
   char        *markov_hcstat2;
+  char        *on_success_hook;
   char        *backend_devices;
   char        *opencl_device_types;
   char        *outfile;
